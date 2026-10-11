@@ -3,125 +3,163 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+// --- ENV ---
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "Velora321";
 const PAGE_TOKEN = process.env.PAGE_TOKEN;
 const PAGE_ID = process.env.PAGE_ID;
 const IG_ID = process.env.IG_ID;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GRAPH_VERSION = process.env.GRAPH_VERSION || "v26.0";
-const GRAPH_URL = `https://graph.facebook.com/${GRAPH_VERSION}`;
-const BAD_WORDS = ["gali", "fraud", "bokachoda", "mc", "scam"];
+const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
-function checkConfig() {
-  const m = [];
-  if (!VERIFY_TOKEN) m.push("VERIFY_TOKEN");
-  if (!PAGE_TOKEN) m.push("PAGE_TOKEN");
-  if (!PAGE_ID) m.push("PAGE_ID");
-  if (!IG_ID) m.push("IG_ID");
-  if (m.length) { console.error("Missing:", m.join(", ")); return false; }
-  return true;
-}
-
-async function apiPost(endpoint, data) {
+// --- AI REPLY ---
+async function getAIReply(userText) {
+  if (!GROQ_API_KEY) return "Hi! Velora Bot e swagotom! Kivabe help korte pari?";
+  const systemPrompt = `
+You are Velora Bots assistant. Reply calm, smart, short. Mix Bangla + English (Banglish).
+Our Services:
+- Normal Bot: Manual 24/7 chatbot, Auto customer service. Price 999TK first, 500TK monthly
+- Pro Bot: 24/7 AI Auto Reply, Pro Customer service, Easy data usage. Price 1499TK first, 800TK monthly
+- Elite Bot: 24/7 AI Auto Reply, Auto Post scheduling, Auto comment, Disable Hate speech, Elite service. Price 1999TK first, 1500TK monthly
+Links: FB - https://www.facebook.com/profile.php?id=61594707113065, WhatsApp - 01644155941
+Always try to sell Elite first. Keep reply under 30 words.
+  `.trim();
   try {
-    const res = await axios.post(`${GRAPH_URL}/${endpoint}`, data, {
-      headers: { Authorization: `Bearer ${PAGE_TOKEN}` }, timeout: 20000
-    });
-    console.log("API success:", endpoint);
-    return res.data;
+    const r = await axios.post("https://api.groq.com/openai/v1/chat/completions", {
+      model: "llama-3.3-70b-versatile",
+      messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userText }]
+    }, { headers: { Authorization: `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" } });
+    return r.data.choices[0].message.content;
   } catch (e) {
-    console.error("API error:", endpoint, JSON.stringify(e.response?.data || e.message));
-    return null;
+    console.log("Groq Error", e.response?.data);
+    return "Velora Bots e swagotom! Normal 999TK, Pro 1499TK, Elite 1999TK. Details lagle bolun.";
   }
 }
 
-function getVeloraReply(text = "") {
-  const t = text.toLowerCase();
-  const isBangla = /[\u0980-\u09FF]/.test(text) || /\b(dam|koto|ki|lagbe|kemon)\b/i.test(text);
-  if (/\b(price|dam|koto|package|service)\b/i.test(t) || /দাম|কত|প্যাকেজ/.test(t)) {
-    return isBangla ? `Velora Bots-এর ৩টি প্যাকেজ:\n\n1. Normal — 999 TK setup + 500 TK/month\n2. Pro — 1499 TK setup + 800 TK/month\n3. Elite — 1999 TK setup + 1500 TK/month` : `Velora Bots Packages:\n1. Normal — 999 TK + 500/mo\n2. Pro — 1499 TK + 800/mo\n3. Elite — 1999 TK + 1500/mo`;
-  }
-  if (/\b(hi|hello|salam|hey)\b/i.test(t)) return isBangla ? "আসসালামু আলাইকুম! Velora Bots-এ স্বাগতম।" : "Hi! Welcome to Velora Bots.";
-  return isBangla ? 'বুঝেছি! "price" লিখুন।' : 'Thanks! Type "price" for packages.';
+// --- GRAPH API HELPER ---
+async function apiPost(path, body) {
+  try {
+    const res = await axios.post(`${GRAPH_BASE}/${path}`, body, { params: { access_token: PAGE_TOKEN } });
+    return res.data;
+  } catch (err) { console.log("POST FAIL", path, err.response?.data?.error); return null; }
+}
+async function apiGet(path) {
+  try {
+    const res = await axios.get(`${GRAPH_BASE}/${path}`, { params: { access_token: PAGE_TOKEN } });
+    return res.data;
+  } catch (err) { console.log("GET FAIL", err.response?.data?.error); return null; }
 }
 
-async function sendDM(recipientId, message) {
-  if (!recipientId || !message) return null;
-  return apiPost(`${IG_ID}/messages`, { recipient: { id: recipientId }, message: { text: message } });
-}
-async function replyToComment(commentId) {
-  return apiPost(`${commentId}/replies`, { message: "thanks for your comment, pls DM us for further information" });
-}
-async function hideComment(commentId) {
-  return apiPost(commentId, { hide: true });
+// --- BAD WORDS FOR AUTO HIDE ---
+const BAD_WORDS = ["madarchod", "bainchod", "bal", "bokachoda", "mc", "bc", "fuck", "bitch", "gali", "chud"];
+
+function isAbusive(text) {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return BAD_WORDS.some(w => lower.includes(w));
 }
 
-// --- NEW FEATURE 1: AUTO POST ---
-async function createPost(imageUrl, caption) {
-  // Step 1: Create container
-  const container = await apiPost(`${IG_ID}/media`, { image_url: imageUrl, caption });
-  if (!container?.id) return null;
-  // Step 2: Publish
-  await new Promise(r => setTimeout(r, 3000)); // IG needs 2-3 sec
-  return apiPost(`${IG_ID}/media_publish`, { creation_id: container.id });
-}
+// --- ROUTES ---
+app.get("/", (req, res) => res.send("Velora Bots Elite v26.0 Running ✅ - All 6 Features Active"));
 
-app.get("/post-now", async (req, res) => {
-  const { image_url, caption } = req.query;
-  if (!image_url) return res.status(400).send("?image_url=LINK&caption=TEXT lagbe");
-  const result = await createPost(image_url, caption || "Posted by Velora Bots");
-  if (result) res.send("✅ Posted Successfully! ID: " + JSON.stringify(result));
-  else res.status(500).send("❌ Post Failed, check logs");
-});
-
-// --- NEW FEATURE 2: AUTO BIO UPDATE ---
-app.get("/update-bio", async (req, res) => {
-  const { bio } = req.query;
-  if (!bio) return res.status(400).send("?bio=YOUR_NEW_BIO");
-  // Note: IG Graph API te direct bio update nei, FB Page er moto. Eta Page er jonno kaj korbe.
-  // IG Bio er jonno manual, but ami endpoint ready rakhlm
-  res.send(`Bio update request: ${bio} - (IG te manual korte hoy, API te allowed na)`);
-});
-
-// --- NEW FEATURE 3: FOLLOWER WELCOME (Workaround) ---
-app.get("/welcome-follower", async (req, res) => {
-  const { user_id } = req.query;
-  if (!user_id) return res.status(400).send("?user_id=IG_USER_ID needed - Daily 50 max safe");
-  const result = await sendDM(user_id, "Thanks for following @velorabots! ❤️ DM us 'price' for packages.");
-  res.send(result ? "Welcome DM Sent" : "Failed");
-});
-
-// Webhook verify
 app.get("/webhook", (req, res) => {
-  if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === VERIFY_TOKEN) return res.status(200).send(req.query["hub.challenge"]);
-  res.sendStatus(403);
+  if (req.query["hub.verify_token"] === VERIFY_TOKEN) res.send(req.query["hub.challenge"]);
+  else res.sendStatus(403);
 });
 
-app.post("/webhook", (req, res) => {
-  res.sendStatus(200);
-  processWebhook(req.body).catch(e => console.error(e.message));
-});
+app.post("/webhook", async (req, res) => {
+  try {
+    const entry = req.body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const messaging = entry?.messaging?.[0];
 
-async function processWebhook(body) {
-  if (body.object !== "instagram") return;
-  for (const entry of body.entry || []) {
-    for (const event of entry.messaging || []) {
-      if (!event.message?.text || event.message.is_echo) continue;
-      await sendDM(event.sender.id, getVeloraReply(event.message.text));
-    }
-    for (const change of entry.changes || []) {
-      if (change.field !== "comments") continue;
-      const c = change.value || {};
-      if (!c.id || !c.text) continue;
-      if (String(c.from?.id) === String(IG_ID)) continue;
-      if (BAD_WORDS.some(w => c.text.toLowerCase().includes(w))) {
-        await hideComment(c.id);
-      } else {
-        await replyToComment(c.id);
+    // 1. AUTO DM REPLY (Messenger + Instagram DM)
+    if (messaging && messaging.message &&!messaging.message.is_echo) {
+      const senderId = messaging.sender.id;
+      const userText = messaging.message.text;
+      if (userText) {
+        const aiText = await getAIReply(userText);
+        await apiPost(`${PAGE_ID}/messages`, {
+          recipient: { id: senderId },
+          message: { text: aiText }
+        });
       }
     }
-  }
-}
 
-app.get("/", (req, res) => res.send("Velora Bots Live - Features: DM, Comment, Hide, Auto Post, Welcome"));
-app.get("/health", (req, res) => res.json({ status: "ok", configured: checkConfig() }));
-app.listen(process.env.PORT || 10000, () => { console.log("Running"); checkConfig(); });
+    // 2 & 3. AUTO COMMENT REPLY + AUTO HIDE
+    if (changes && changes.field === "comments" && changes.value) {
+      const commentId = changes.value.id || changes.value.comment_id;
+      const commentText = changes.value.text || changes.value.message || "";
+      const mediaId = changes.value.media?.id || changes.value.post_id;
+
+      if (isAbusive(commentText)) {
+        // Hide abusive comment
+        await apiPost(`${commentId}`, { hide: true });
+        console.log("Hidden abusive comment:", commentId);
+      } else if (commentId) {
+        // Normal comment reply
+        const aiReply = await getAIReply(commentText);
+        await apiPost(`${commentId}/replies`, { message: aiReply });
+      }
+    }
+
+    // 4. STORY MENTION AUTO REPLY
+    if (changes && changes.field === "mentions" && changes.value) {
+      const senderId = changes.value.from?.id;
+      if (senderId) {
+        await apiPost(`${PAGE_ID}/messages`, {
+          recipient: { id: senderId },
+          message: { text: "Thanks for mentioning us in your story! ❤️ Follow our page for Elite Bot services - Velora Bots" }
+        });
+      }
+    }
+
+    // 5. FOLLOWER WELCOME (Note: IG webhook for follows is limited, this handles if event comes)
+    if (changes && changes.field === "follows" && changes.value) {
+      const followerId = changes.value.from?.id;
+      if (followerId) {
+        await apiPost(`${PAGE_ID}/messages`, {
+          recipient: { id: followerId },
+          message: { text: "Welcome to Velora Bots! 🎉 Thanks for following. Elite Bot 1999TK only. DM for details!" }
+        });
+      }
+    }
+
+  } catch (e) { console.log("Webhook Error", e.message); }
+  res.sendStatus(200);
+});
+
+// 6. AUTO POST (Image) - /post-now?image_url=LINK&caption=TEXT
+app.get("/post-now", async (req, res) => {
+  const { image_url, caption } = req.query;
+  if (!image_url) return res.status(400).send("image_url lagbe");
+  const container = await apiPost(`${IG_ID}/media`, { image_url, caption: caption || "Velora Bots Elite 🔥" });
+  if (!container?.id) return res.status(500).send("Container failed - check token & public image url");
+  await new Promise(r => setTimeout(r, 6000));
+  const pub = await apiPost(`${IG_ID}/media_publish`, { creation_id: container.id });
+  res.send(pub?.id? `✅ Image Posted: ${pub.id}` : "❌ Publish Failed");
+});
+
+// 6b. AUTO REEL POST - /reel-now?video_url=LINK&caption=TEXT
+app.get("/reel-now", async (req, res) => {
+  const { video_url, caption } = req.query;
+  if (!video_url) return res.status(400).send("video_url lagbe");
+  const container = await apiPost(`${IG_ID}/media`, {
+    media_type: "REELS",
+    video_url,
+    caption: caption || "Velora Bots Elite Reel 🔥"
+  });
+  if (!container?.id) return res.status(500).send("Reel container failed");
+  // Reel takes longer to process
+  await new Promise(r => setTimeout(r, 30000));
+  const pub = await apiPost(`${IG_ID}/media_publish`, { creation_id: container.id });
+  res.send(pub?.id? `✅ Reel Posted: ${pub.id}` : "❌ Reel Publish Failed - wait 1 min & try again");
+});
+
+// Simple schedule check endpoint
+app.get("/schedule-post", (req, res) => {
+  res.send("Use cron-job.org -> Call https://your-app.onrender.com/post-now?image_url=... every day");
+});
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`Velora Bots Elite Running on ${PORT}`));
