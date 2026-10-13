@@ -1,6 +1,17 @@
 const express = require("express");
 const axios = require("axios");
 const app = express();
+app.get('/webhook', (req, res) => {
+  const VERIFY_TOKEN = "Velora321";
+  let mode = req.query['hub.mode'];
+  let token = req.query['hub.verify_token'];
+  let challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+    res.status(200).send(challenge);
+  } else {
+    res.sendStatus(403);
+  }
+});
 app.use(express.json());
 
 // --- ENV ---
